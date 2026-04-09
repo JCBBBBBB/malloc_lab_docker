@@ -16,7 +16,7 @@ double fcyc(test_funct f, void* argp);
 /*********************************************************
  * Set the various parameters used by measurement routines 
  *********************************************************/
-
+//
 /* 
  * set_fcyc_clear_cache - When set, will run code to clear cache 
  *     before each measurement. 
