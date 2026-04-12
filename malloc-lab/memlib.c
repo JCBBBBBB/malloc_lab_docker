@@ -55,16 +55,22 @@ void mem_reset_brk()
  *    by incr bytes and returns the start address of the new area. In
  *    this model, the heap cannot be shrunk.
  */
+// 힙을 증가 바이트만큼 확장하고 새 영역의 시작 주소를 반환한다
 void *mem_sbrk(int incr) 
-{
+{   
+
     char *old_brk = mem_brk;
 
-    if ( (incr < 0) || ((mem_brk + incr) > mem_max_addr)) {
+    if ( (incr < 0) || ((mem_brk + incr) > mem_max_addr)) 
+    {
 	errno = ENOMEM;
 	fprintf(stderr, "ERROR: mem_sbrk failed. Ran out of memory...\n");
 	return (void *)-1;
     }
+    //주소를 incr만큼 증가시킨다
     mem_brk += incr;
+
+    //예전 주소를 반환한다
     return (void *)old_brk;
 }
 
