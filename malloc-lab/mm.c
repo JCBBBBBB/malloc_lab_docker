@@ -88,12 +88,13 @@ team_t team = {
  //힙의 주소
  static char* heap_listp;
 
+ // 현재 free block bp를 기준으로, 앞뒤 free 블록과 합쳐서 더 큰 free block으로 만드는 함수
  static void * coalesce(void * bp)
 {
-    // 이전 블록이 할당 상태인지 확인
+    // 이전 블록의 footer를 보고 할당 상태인지 확인
     size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
 
-    // 다음 블록이 할당 상태인지 확인
+    // 다음 블록의 header를 보고 할당 상태인지 확인
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
     
     // 현재 블록 크기 읽기
@@ -164,8 +165,7 @@ static void *extend_heap(size_t words) //1024
     } // bp에는 그 새 공간의 시작주소 담긴다
 
 
-    // 새 free block의 헤더를 만든다는 뜻
-    // size = 블록 크기, 0 = free 상태
+    // 새 free block의 헤더를 만든다는 뜻(에필로그 헤더 자리이다)
     // bp의 헤더 주소에 이 값을 넣는다
     PUT(HDRP(bp), PACK(size, 0));
 
@@ -175,12 +175,58 @@ static void *extend_heap(size_t words) //1024
     // 새 free block 뒤에 새 epilogue header를 만드는 것
     PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));
 
-    // 앞 블록도 free라면 
+    // 앞 블록도 free라면
+    // 처음 extend_heap의 coalesce는 아무것도 안한다
     return coalesce(bp);
 }
 
 
+static void place(void* bp, size_t allocated_size)
+{
+    size_t curr_size = GET_SIZE(HDRP(bp));
+    
+    // Case 1. 남는 부분이 최소 블록 크기(16 bytes) 이상일 때 -> 블록 분할
 
+    if((curr_size - allocated_size) >= (2 * DSIZE))
+    {
+        PUT(HDRP(bp), PACK(allocated_size, 1));
+        PUT(FTRP(bp), PACK(allocated_size, 1));
+        bp = NEXT_BLKP(bp);
+
+        PUT(HDRP(bp), PACK(curr_size - allocated_size, 0));
+        PUT(FTRP(bp), PACK(curr_size - allocated_size, 0));
+    }
+    // Case 2. 남는 부분이 최소 블록 크기(16 bytes) 미만일 때 -> 블록 분할 필요 X
+
+    else
+    {
+        PUT(HDRP(bp), PACK(curr_size, 1));
+        PUT(FTRP(bp), PACK(curr_size, 1));
+    }
+}
+
+//first fit
+static void *find_fit(size_t asize)
+{
+    //현재 보고 있는 블록의 payload 주소
+    void *bp;
+
+    // heap_listp: 힙의 시작쪽을 가리키는 포인터; 
+    //GET_SIZE(HDRP(bp)) : 현재 블록 크기 -> 맨 끝의 에필로그 헤더의 크기는 0이기 때문에 그 전까지 계속 순회하라는 뜻 
+    //NEXT_BLKP(bp) : 현재 블록 크기만큼 앞으로 가서 다음 블록의 payload 주소를 구한다
+    for(bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp))
+    {
+        // GET_ALLOC(HDRP(bp)) -> 헤더에서 할당여부만 꺼내는 코드에서 할당되었는지 안되었는지 확인 , 0이면 free라는 뜻
+        // 현재 free block size가 내가 할당하고 싶은 사이즈보다 큰가
+        if(!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp))))
+        {
+            return bp; // payload 주소를 준다
+        }
+    }
+
+    // 빈 곳이 없으면 NULL 반환
+    return NULL;
+}
 
 
 int mm_init(void)
@@ -199,7 +245,8 @@ int mm_init(void)
 
     heap_listp += DSIZE;
 
-    if(extend_heap(CHUNKSIZE/WSIZE) == NULL)
+    // free 블록 만든다
+    if(extend_heap(CHUNKSIZE/WSIZE) == NULL) // 1024
     {
         return -1;
     }
@@ -222,27 +269,37 @@ void *mm_malloc(size_t size)
         return NULL;
     }
 
+    //할당하려고 하는 size가 8보다 작으면
     if(size <= DSIZE)
     {
+        // 16바이트 준다 -> 이유 : payload가 8바이트면,  헤더 : 4바이트, 푸터 : 4바이트
         asize = 2 * DSIZE;
     }
+    //할당하려고 하는 size가 8보다 크면
     else
     {
+        // 8의 배수가 되게 하려고 DSIZE(헤더 + 푸터 공간 8바이트) + 올림용 7바이트
+        // 주소 정렬이 유지된다
         asize = DSIZE * ((size + (DSIZE) + (DSIZE-1)) / DSIZE); 
     }
 
+    // 빈 블록 찾기
     if((bp = find_fit(asize)) != NULL)
     {
+        //
         place(bp, asize);
         return bp;
     }
 
+    // 빈 블록 없는 경우
+    // 힙 확장한다
     extendsize = MAX(asize, CHUNKSIZE);
     if((bp = extend_heap(extendsize/WSIZE)) == NULL)
     {
         return NULL;
     }
 
+    //새 힙 영역에 블록 배치
     place(bp, asize);
     return bp;
 }
@@ -291,17 +348,3 @@ void *mm_realloc(void *ptr, size_t size)
     return newptr;
 }
 
-static void *find_fit(size_t asize)
-{
-    void *bp;
-
-    for(bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp))
-    {
-        if(!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp))))
-        {
-            return bp;
-        }
-    }
-
-    return NULL;
-}
