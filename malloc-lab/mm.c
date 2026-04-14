@@ -88,6 +88,11 @@ team_t team = {
 // 현재 블록의 payload 포인터 bp에서 이전 블록의 payload 포인터를 구한다.
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
 
+#define GET_NEXT(bp) (*(void **)(bp))         
+#define GET_PREV(bp) (*(void **)(bp + WSIZE)) 
+
+
+
 /*
  * mm_init - initialize the malloc package.
  */
@@ -95,8 +100,52 @@ team_t team = {
 // 힙의 주소
 static char *heap_listp;
 
+// free 블록 리스트의 시작 포인터
+static char *free_listp;
+
 // 다음에도 기억할 next_fit 주소
-static void *nextAddress = NULL;
+// static void *nextAddress = NULL;
+
+static void insert_free(void *bp)
+{
+    GET_NEXT(bp) = free_listp;
+    GET_PREV(bp) = NULL;
+    GET_PREV(free_listp) = bp;
+    free_listp = bp;
+
+
+
+
+    // 경우 1. bp가 맨 앞 (PRED가 NULL)
+    
+
+
+    // 경우 2. bp가 중간/끝
+
+    // 공통. bp의 SUCC이 NULL이 아니면
+    //[ header | next pointer | prev pointer | ... 남는 공간 ... | footer ]
+
+}
+
+static void remove_free(void *bp)
+{   
+    //bp가 맨 앞
+    if(bp == free_listp)
+    {
+        free_listp = GET_NEXT(bp);
+        GET_PREV(free_listp) = NULL; 
+    }
+    else if(GET_NEXT(bp) == NULL) //bp가 맨 뒤
+    {
+        GET_NEXT(GET_PREV(bp)) = NULL;
+        GET_PREV(bp) = NULL;
+    }
+    else // bp가 중간
+    {
+        GET_NEXT(GET_PREV(bp)) = GET_NEXT(bp);
+        GET_PREV(GET_NEXT(bp)) = GET_PREV(bp);
+    }
+}
 
 // 현재 free block bp를 기준으로, 앞뒤 free 블록과 합쳐서 더 큰 free block으로 만드는 함수
 static void *coalesce(void *bp)
@@ -127,8 +176,6 @@ static void *coalesce(void *bp)
         // footer size 교체
         PUT(FTRP(bp), PACK(size, 0));
 
-        // if (nextAddress == NEXT_BLKP(bp) || nextAddress == bp)
-        //     nextAddress = bp;
     }
 
     // 앞은 free, 뒤는 사용 중
@@ -145,9 +192,6 @@ static void *coalesce(void *bp)
 
         // 주소를 이전 블록의 payload 주소로 바꾼다
         bp = PREV_BLKP(bp);
-
-        // if (nextAddress == PREV_BLKP(bp) || nextAddress > bp)
-        //     nextAddress = bp;
     }
 
     // 둘다 비었을 때
@@ -158,14 +202,10 @@ static void *coalesce(void *bp)
         PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
         bp = PREV_BLKP(bp);
 
-        // if(nextAddress >= bp)
-        // {
-        //     nextAddress = bp;
-        // }
     }
     dbg_printf("병합됨         =>  header: %p(%ld bytes)   size:%d bytes\n", HDRP(bp), HDRP(bp) - (char *)heap_listp, (int)(size));
     
-    nextAddress = bp;  // 병합된 블록으로 nextAddress 업데이트
+    // nextAddress = bp;  // 병합된 블록으로 nextAddress 업데이트
     return bp;
 }
 
@@ -215,7 +255,7 @@ static void place(void *bp, size_t allocated_size)
         PUT(FTRP(bp), PACK(allocated_size, 1)); // 푸터, 사이즈랑 할당 바꿔준다
         bp = NEXT_BLKP(bp);                     // payload 주소로
 
-        nextAddress = bp;
+        // nextAddress = bp;
 
         PUT(HDRP(bp), PACK(curr_size - allocated_size, 0)); // 새로운 헤더 사이즈 생성
         PUT(FTRP(bp), PACK(curr_size - allocated_size, 0)); // 에필로그 헤더에 남은 사이즈
@@ -254,32 +294,71 @@ static void place(void *bp, size_t allocated_size)
 // }
 
 // next fit 버전
-static void *find_fit(size_t asize)
+// static void *find_fit(size_t asize)
+// {
+//     void *bp;
+
+
+//     for (bp = nextAddress; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp))
+//     {
+//         // GET_ALLOC(HDRP(bp)) -> 헤더에서 할당여부만 꺼내는 코드에서 할당되었는지 안되었는지 확인 , 0이면 free라는 뜻
+//         // 현재 free block size가 내가 할당하고 싶은 사이즈보다 큰가
+//         if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp))))
+//         {
+//             nextAddress = bp;
+//             return bp; // payload 주소를 준다
+//         }
+//     }
+
+//     for(bp = heap_listp; GET_SIZE(HDRP(bp)) > 0 && bp != nextAddress; bp = NEXT_BLKP(bp))
+//     {
+//         if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp))))
+//         {
+//             //처음부터 다시 돈다
+//             nextAddress = bp;
+//             return bp; // payload 주소를 준다
+//         }
+//     }
+
+//     return NULL;
+// }
+
+
+// best_fit!!
+static void* find_fit(size_t asize)
 {
-    void *bp;
+    void* bp = NULL;
+    void* tempBp = NULL;
 
-
-    for (bp = nextAddress; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp))
+    for(bp = heap_listp; GET_SIZE(HDRP(bp)); bp = NEXT_BLKP(bp))
     {
-        // GET_ALLOC(HDRP(bp)) -> 헤더에서 할당여부만 꺼내는 코드에서 할당되었는지 안되었는지 확인 , 0이면 free라는 뜻
-        // 현재 free block size가 내가 할당하고 싶은 사이즈보다 큰가
-        if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp))))
-        {
-            nextAddress = bp;
-            return bp; // payload 주소를 준다
+        // 이 payload 주소가 free인 상태이고 내가 할당하고 싶은 사이즈보다는 이 블록이 크고
+        // 내가 현재 할당하고 싶은 사이즈와 이 블록의 사이즈 절댓값 차가, 전에 저장한 bp의 사이즈보다 작으면 교체
+        // 더 크면 그냥 넘어간다
+        if(!GET_ALLOC(HDRP(bp)) && GET_SIZE(HDRP(bp)) >= asize) // 
+        {   
+            // 처음 빈 블록을 만났을때 tempBp가 비어있으면 그 블록을 그냥 초기값으로 설정
+            if(tempBp == NULL)
+            {
+                tempBp = bp;
+                continue;
+            }
+
+            // 그 다음부터 현재 선택된 블록의 사이즈와 내가 할당하고 싶은 크기와의 절댓값 차가
+            // 전에 선택된 블록 사이즈와 내가 할당하고 싶은 크기와의 절댓값 차보다 작으면
+            // 현재를 선택
+            if(GET_SIZE(HDRP(bp)) - asize < GET_SIZE(HDRP(tempBp)) - asize)
+            {
+                tempBp = bp;
+            }
         }
     }
 
-    for(bp = heap_listp; GET_SIZE(HDRP(bp)) > 0 && bp != nextAddress; bp = NEXT_BLKP(bp))
-    {
-        if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp))))
-        {
-            nextAddress = bp;
-            return bp; // payload 주소를 준다
-        }
-    }
-    return NULL;
+
+    return tempBp;
+  
 }
+
 
 
 int mm_init(void)
@@ -307,7 +386,7 @@ int mm_init(void)
         return -1;
     }
 
-    nextAddress = init_bp; // 테스트 1하고 테스트 2할때 이 값이 NULL 이어야 한다
+    // nextAddress = init_bp; // 테스트 1하고 테스트 2할때 이 값이 NULL 이어야 한다
 
     dbg_printf("\nmm_init:  heap_strt: %p (0 bytes) \n\n", heap_listp);
 
